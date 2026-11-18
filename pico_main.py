@@ -46,7 +46,7 @@ ADC_MAX = 8388607
 MAX_PRESSURE_KPA = 40.0
 ADC_RANGE = ADC_MAX - ZERO_OFFSET
 PRESS_AVG = 4
-SENSOR_TIMEOUT_MS = 1500     # no valid reading for this long -> pump OFF
+SENSOR_TIMEOUT_MS = 3000     # tolerate brief HX710B gaps; prolonged sensor loss -> pump OFF
 
 LOOP_DELAY_MS = 100
 
@@ -338,7 +338,12 @@ def poll_pump_command():
     try:
         response = requests.get(PUMP_URL, headers={"ngrok-skip-browser-warning": "true"})
         if response.status_code == 200:
-            state = response.json().get("pump_enabled")
+            result = response.json()
+            if result.get("shared_store_ready") is False:
+                pump_enabled = False
+                print("PUMP CONTROL BLOCKED: Vercel shared store is not configured")
+                return
+            state = result.get("pump_enabled")
             if isinstance(state, bool):
                 pump_enabled = state
                 print("Dashboard pump command:", "ON" if state else "OFF")

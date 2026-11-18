@@ -154,9 +154,16 @@ async function loadLatest() {
 async function loadHealth() {
   try {
     const h = await getJSON("/api/health");
-    $("healthWarning").classList.toggle("hidden", h.model_ready);
-    $("healthWarning").textContent = "SVM model not ready: " + (h.model_error || h.missing_model_files.join(", "));
-  } catch (e) { console.log(e); }
+    const warnings = [];
+    if (!h.model_ready) warnings.push("SVM model not ready: " + (h.model_error || h.missing_model_files.join(", ")));
+    if (h.vercel_environment && !h.shared_store_ready)
+      warnings.push("Shared store missing: configure UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Vercel, then redeploy.");
+    $("healthWarning").classList.toggle("hidden", warnings.length === 0);
+    $("healthWarning").textContent = warnings.join(" | ");
+  } catch (e) {
+    $("healthWarning").classList.remove("hidden");
+    $("healthWarning").textContent = "API health check failed: " + e.message;
+  }
 }
 
 // ---------------------------------------------------------------- charts

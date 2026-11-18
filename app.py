@@ -3,13 +3,16 @@
 Run:  uvicorn app:app --host 0.0.0.0 --port 8000
 """
 import asyncio
+import json
 import os
 import sqlite3
 import time
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
+import httpx
 import joblib
 import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -193,7 +196,38 @@ model = Model()
 # ----------------------------------------------------------------- live state
 last = {"seen": None, "timestamp": None, "prediction": None, "reading": None, "note": None}
 clients: set[WebSocket] = set()
-pump = {"enabled": False}         # fail-safe default; dashboard must explicitly turn it on
+pump = {"enabled": False}         # local fallback; Vercel uses shared Redis state
+KV_URL = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
+KV_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+
+
+def shared_store_ready() -> bool:
+    return bool(KV_URL and KV_TOKEN)
+
+
+async def shared_get(key: str):
+    if not shared_store_ready():
+        return None
+    url = KV_URL + "/get/" + quote(key, safe="")
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(url, headers={"Authorization": "Bearer " + KV_TOKEN})
+        response.raise_for_status()
+        return response.json().get("result")
+
+
+async def shared_set(key: str, value: str):
+    if not shared_store_ready():
+        return False
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.post(
+            KV_URL,
+            json=["SET", key, value],
+            headers={"Authorization": "Bearer " + KV_TOKEN},
+        )
+        response.raise_for_status()
+        if response.json().get("result") != "OK":
+            raise RuntimeError("Redis did not confirm SET")
+    return True
 
 
 def is_connected() -> bool:
@@ -307,6 +341,15 @@ class ReadingIn(BaseModel):
 async def post_reading(data: ReadingIn):
     values = {f: getattr(data, f) for f in PICO_FIELDS}
 
+    if shared_store_ready():
+        try:
+            stored_pump = await shared_get("airguard:pump_enabled")
+            if stored_pump is not None:
+                pump["enabled"] = str(stored_pump).lower() == "true"
+        except Exception as e:
+            print("Shared pump state read error:", repr(e))
+            pump["enabled"] = False
+
     # The two calculated features: change since the PREVIOUS reading.
     # First reading (or first after a disconnect): no change yet -> 0, so we can
     # still predict on EVERY reading.
@@ -362,6 +405,8 @@ async def post_reading(data: ReadingIn):
         row = con.execute("SELECT * FROM sensor_readings WHERE id=?", (reading_id,)).fetchone()
 
     last.update(seen=time.monotonic(), timestamp=ts, prediction=label, reading=dict(row), note=note)
+    if shared_store_ready():
+        await shared_set("airguard:latest_reading", json.dumps(dict(row), separators=(",", ":")))
     await broadcast(snapshot("reading"))
     state, reason = get_state()
     return {"success": True, "reading_id": reading_id, "timestamp": ts,
@@ -410,12 +455,28 @@ class PumpIn(BaseModel):
 
 @app.get("/api/pump")
 async def get_pump():
-    return {"pump_enabled": pump["enabled"]}
+    if shared_store_ready():
+        try:
+            stored = await shared_get("airguard:pump_enabled")
+            if stored is not None:
+                pump["enabled"] = str(stored).lower() == "true"
+        except Exception as e:
+            print("Shared pump state read error:", repr(e))
+            raise HTTPException(503, "Could not read the shared pump command")
+    return {"pump_enabled": pump["enabled"], "shared_store_ready": shared_store_ready()}
 
 
 @app.post("/api/pump")
 async def set_pump(data: PumpIn):
     """Dashboard button. The Pico reads pump_enabled from its next POST /api/readings reply."""
+    if data.on and os.getenv("VERCEL") and not shared_store_ready():
+        raise HTTPException(503, "Pump ON requires the shared Upstash store; configure its Vercel environment variables")
+    if shared_store_ready():
+        try:
+            await shared_set("airguard:pump_enabled", "true" if data.on else "false")
+        except Exception as e:
+            print("Shared pump state write error:", repr(e))
+            raise HTTPException(503, "Could not save the pump command to shared storage")
     pump["enabled"] = data.on
     await broadcast(snapshot("state_change"))
     return {"pump_enabled": pump["enabled"]}
@@ -423,7 +484,33 @@ async def set_pump(data: PumpIn):
 
 @app.get("/api/latest")
 async def latest():
-    return snapshot("snapshot")
+    result = snapshot("snapshot")
+    if shared_store_ready():
+        try:
+            stored = await shared_get("airguard:latest_reading")
+            if stored:
+                reading = json.loads(stored)
+                result["reading"] = reading
+                result["last_reading_timestamp"] = reading["timestamp"]
+                result["prediction"] = reading.get("prediction")
+                age = (datetime.now(timezone.utc) - to_dt(reading["timestamp"])).total_seconds()
+                result["device_connected"] = age <= DEVICE_TIMEOUT_SECONDS
+                pump_state = await shared_get("airguard:pump_enabled")
+                if pump_state is not None:
+                    result["pump_enabled"] = str(pump_state).lower() == "true"
+                if not result["pump_enabled"]:
+                    result["state"], result["state_reason"] = "off", "system_off"
+                elif not result["device_connected"]:
+                    result["state"], result["state_reason"] = "offline", "device_timeout"
+                elif result["prediction"] is None:
+                    result["state"], result["state_reason"] = "offline", "no_prediction"
+                else:
+                    result["state"] = "leakage" if result["prediction"] == "Leakage" else "normal"
+                    result["state_reason"] = "ok"
+        except Exception as e:
+            print("Shared latest reading error:", repr(e))
+            raise HTTPException(503, "Could not read the shared latest reading")
+    return result
 
 
 def time_range(range_, start, end):
@@ -491,6 +578,8 @@ async def health():
             "device_timeout_seconds": DEVICE_TIMEOUT_SECONDS,
             "model_ready": not model.missing, "missing_model_files": model.missing,
             "model_error": model.error, "files_found": model.found,
+            "shared_store_ready": shared_store_ready(),
+            "vercel_environment": bool(os.getenv("VERCEL")),
             "folders_searched": [str(f) for f in model.folders],
             "websocket_clients": len(clients)}
 
