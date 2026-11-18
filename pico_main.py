@@ -27,7 +27,7 @@ WIFI_SSID = "AirGuard"
 WIFI_PASSWORD = "AirGuard50100150"
 
 # Vercel FastAPI deployment. Keep this host in sync with frontend/script.js.
-API_URL = "https://airguard1-x9p3.vercel.app/api/readings"
+API_URL = "https://airguard-neon.vercel.app/api/readings"
 PUMP_URL = API_URL.rsplit("/", 1)[0] + "/pump"
 DEVICE_ID = "pico2w-01"
 SEND_INTERVAL_MS = 2000      # must be well below the server timeout (10 s)

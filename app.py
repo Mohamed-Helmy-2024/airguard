@@ -18,7 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # ----------------------------------------------------------------- settings
 BASE = Path(__file__).resolve().parent          # the folder where app.py is
-DB_FILE = BASE / "airguard.db"
+# Vercel's deployed bundle is not a writable database directory. /tmp permits
+# live writes for this function instance; use a managed database for durable,
+# cross-instance storage in production.
+DB_FILE = Path("/tmp/airguard.db") if os.getenv("VERCEL") else BASE / "airguard.db"
 DEVICE_TIMEOUT_SECONDS = float(os.getenv("DEVICE_TIMEOUT_SECONDS", 10))
 
 # 9 values the Pico sends (names = training column names)
@@ -221,6 +224,10 @@ def snapshot(kind: str) -> dict:
     state, reason = get_state()
     with closing(db()) as con:
         ev = con.execute("SELECT * FROM leakage_events WHERE status='active'").fetchone()
+        reading_row = con.execute("SELECT * FROM sensor_readings ORDER BY id DESC LIMIT 1").fetchone()
+    reading = dict(reading_row) if reading_row else last["reading"]
+    reading_timestamp = reading["timestamp"] if reading else last["timestamp"]
+    prediction = reading["prediction"] if reading else last["prediction"]
     return {
         "type": kind,
         "server_time": now_ts(),
@@ -228,9 +235,9 @@ def snapshot(kind: str) -> dict:
         "state_reason": reason,
         "device_connected": is_connected(),
         "pump_enabled": pump["enabled"],
-        "last_reading_timestamp": last["timestamp"],
-        "prediction": last["prediction"],
-        "reading": last["reading"],
+        "last_reading_timestamp": reading_timestamp,
+        "prediction": prediction,
+        "reading": reading,
         "active_event": event_dict(ev) if ev else None,
     }
 

@@ -1,5 +1,5 @@
 // ===== CHANGE THIS to your FastAPI address (no slash at the end) =====
-const API_BASE = "https://airguard1-x9p3.vercel.app";
+const API_BASE = "https://airguard-neon.vercel.app";
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,7 +67,7 @@ async function togglePump() {
   try {
     const res = await fetch(API_BASE + "/api/pump", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ on: !pumpOn }),
     });
     if (res.status === 404 || res.status === 405)
