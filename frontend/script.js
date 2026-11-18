@@ -20,7 +20,7 @@ function duration(s) {
 }
 
 async function getJSON(path) {
-  const res = await fetch(API_BASE + path, { headers: { "ngrok-skip-browser-warning": "true" } });
+  const res = await fetch(API_BASE + path, { cache: "no-store" });
   if (!res.ok) throw new Error("Server returned " + res.status);
   return res.json();
 }
@@ -142,7 +142,13 @@ function showSnapshot(m) {
 }
 
 async function loadLatest() {
-  try { showSnapshot(await getJSON("/api/latest")); } catch (e) { console.log(e); }
+  try {
+    showSnapshot(await getJSON("/api/latest"));
+    $("connection").textContent = "API: connected";
+  } catch (e) {
+    $("connection").textContent = "API error: " + e.message;
+    console.error("Latest reading request failed:", e);
+  }
 }
 
 async function loadHealth() {
@@ -162,8 +168,9 @@ const CHARTS = {
 const charts = {};
 let lastChartId = 0;
 
-for (const id in CHARTS) {
-  charts[id] = new Chart($(id), {
+if (typeof Chart !== "undefined") {
+  for (const id in CHARTS) {
+    charts[id] = new Chart($(id), {
     type: "line",
     data: {
       labels: [],
@@ -171,7 +178,8 @@ for (const id in CHARTS) {
         ({ label, data: [], borderColor: color, borderWidth: 2, pointRadius: 0 })),
     },
     options: { animation: false, maintainAspectRatio: false, scales: { x: { ticks: { maxTicksLimit: 6 } } } },
-  });
+    });
+  }
 }
 
 async function loadCharts() {
@@ -273,6 +281,8 @@ loadHealth();
 loadCharts();
 loadEvents();
 connectWS();
-setInterval(() => { if (!wsOpen) loadLatest(); }, 5000);   // fallback if WebSocket is down
+// Poll REST even if the WebSocket appears open; Vercel may serve the socket
+// and Pico POST from separate function instances.
+setInterval(loadLatest, 2000);
 setInterval(loadEvents, 15000);
 setInterval(loadHealth, 30000);
