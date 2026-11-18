@@ -1,5 +1,5 @@
 // ===== CHANGE THIS to your FastAPI address (no slash at the end) =====
-const API_BASE = "https://brick-breeches-diploma.ngrok-free.dev";
+const API_BASE = "https://airguard1-x9p3.vercel.app";
 
 const $ = (id) => document.getElementById(id);
 

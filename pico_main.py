@@ -26,9 +26,8 @@ except ImportError:
 WIFI_SSID = "AirGuard"
 WIFI_PASSWORD = "AirGuard50100150"
 
-# The backend is running on the PC at 192.168.1.6:8000. Keep the Pico and
-# dashboard pointed at the SAME server. Change this address if the PC's LAN IP changes.
-API_URL = "http://192.168.1.6:8000/api/readings"
+# Vercel FastAPI deployment. Keep this host in sync with frontend/script.js.
+API_URL = "https://airguard1-x9p3.vercel.app/api/readings"
 PUMP_URL = API_URL.rsplit("/", 1)[0] + "/pump"
 DEVICE_ID = "pico2w-01"
 SEND_INTERVAL_MS = 2000      # must be well below the server timeout (10 s)
