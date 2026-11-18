@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AirGuard</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body class="offline">
+
+<nav>
+  <b class="logo">AirGuard</b>
+  <div class="links">
+    <button onclick="showPage('dashboard')">Dashboard</button>
+    <button onclick="showPage('model')">Model Performance</button>
+    <button onclick="showPage('about')">About</button>
+  </div>
+  <div class="controls">
+    <span id="pumpState" class="pump-box">Pump: --</span>
+    <button id="pumpBtn" class="pump-btn" onclick="togglePump()">Pump</button>
+    <span id="connection" class="pill">Server: connecting...</span>
+  </div>
+</nav>
+
+<main>
+<!-- ============ DASHBOARD ============ -->
+<section id="dashboard" class="page">
+  <div id="healthWarning" class="notice hidden no-print"></div>
+
+  <div class="card status no-print">
+    <div>
+      <small>System status</small>
+      <h1 id="statusText">OFFLINE</h1>
+      <p id="stateReason"></p>
+      <p id="eventInfo"></p>
+    </div>
+    <div class="right">Last reading<br><b id="lastTime">-</b></div>
+  </div>
+
+  <div id="warning" class="warning hidden no-print">LEAKAGE DETECTED</div>
+
+  <div class="grid two no-print">
+    <div class="card">
+      <h3>SVM prediction</h3>
+      <p id="prediction" class="big">-</p>
+      <p id="predictionNote"></p>
+    </div>
+    <div class="card">
+      <h3>Pressure</h3>
+      <svg viewBox="0 0 200 120" class="gauge">
+        <path class="gauge-bg" d="M10 100 A90 90 0 0 1 190 100"/>
+        <path id="gaugeFill" class="gauge-fill" d="M10 100 A90 90 0 0 1 190 100"/>
+        <text id="gaugeValue" x="100" y="92" text-anchor="middle">--</text>
+        <text x="10" y="118" text-anchor="middle">0</text>
+        <text x="190" y="118" text-anchor="middle">40 kPa</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="card no-print">
+    <h3>Sensor readings <span id="testBadge" class="badge hidden">TEST DATA - not from hardware</span></h3>
+    <div id="sensors" class="grid"></div>
+  </div>
+
+  <div class="card no-print">
+    <h3>Charts
+      <select id="chartRange" onchange="loadCharts()">
+        <option value="15">Last 15 minutes</option>
+        <option value="60" selected>Last hour</option>
+        <option value="120">Last 2 hours</option>
+      </select>
+    </h3>
+    <div class="grid">
+      <div class="chart-box"><canvas id="pressureChart"></canvas></div>
+      <div class="chart-box"><canvas id="soundChart"></canvas></div>
+      <div class="chart-box"><canvas id="freqChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="print-only print-header">
+      <img src="logo.svg" alt="AirGuard logo" onerror="this.remove()">
+      <h1>AirGuard - Leakage Report</h1>
+    </div>
+    <h3>Leakage history</h3>
+    <div class="filters no-print">
+      <select id="range" onchange="loadEvents()">
+        <option value="24h">Last 24 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
+        <option value="custom">Custom range</option>
+      </select>
+      <span id="customBox" class="hidden">
+        <input type="datetime-local" id="start"> to <input type="datetime-local" id="end">
+        <button onclick="loadEvents()">Apply</button>
+      </span>
+      <button onclick="window.print()">Print report</button>
+    </div>
+    <p id="reportRange"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Start time</th><th>End time</th><th>Duration</th><th>Status</th></tr></thead>
+        <tbody id="eventsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MODEL PERFORMANCE ============ -->
+<section id="model" class="page hidden">
+  <h2>SVM model performance</h2>
+  <div class="grid">
+    <div class="card metric"><small>Accuracy</small><b>98%</b></div>
+    <div class="card metric"><small>Precision</small><b>97%</b></div>
+    <div class="card metric"><small>Recall</small><b>100%</b></div>
+    <div class="card metric"><small>F1-Score</small><b>98%</b></div>
+  </div>
+  <div class="card">
+    <h3>Confusion matrix</h3>
+    <table class="matrix">
+      <tr><th>Actual / Predicted</th><th>Leakage</th><th>Not Leakage</th></tr>
+      <tr><th>Leakage</th><td class="good">38</td><td class="bad">0</td></tr>
+      <tr><th>Not Leakage</th><td class="bad">2</td><td class="good">228</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ============ ABOUT ============ -->
+<section id="about" class="page hidden">
+  <h2>About</h2>
+  <p>Click a card to flip it.<code>profile.jpg</code>.</p>
+  <div class="grid" id="aboutCards"></div>
+</section>
+</main>
+
+<!-- New leakage popup -->
+<div id="popup" class="overlay hidden">
+  <div class="popup">
+    <h2>New leakage detected</h2>
+    <p id="popupText"></p>
+    <button onclick="document.getElementById('popup').classList.add('hidden')">OK</button>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
