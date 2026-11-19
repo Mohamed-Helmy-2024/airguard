@@ -19,30 +19,23 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
-# ----------------------------------------------------------------- settings
 BASE = Path(__file__).resolve().parent          # the folder where app.py is
-# Vercel's deployed bundle is not a writable database directory. /tmp permits
-# live writes for this function instance; use a managed database for durable,
-# cross-instance storage in production.
+# Vercel deployments use temporary storage; persistent data uses Upstash.
 DB_FILE = Path("/tmp/airguard.db") if os.getenv("VERCEL") else BASE / "airguard.db"
 DEVICE_TIMEOUT_SECONDS = float(os.getenv("DEVICE_TIMEOUT_SECONDS", 10))
 
-# 9 values the Pico sends (names = training column names)
+# Pico fields match the training column names.
 PICO_FIELDS = ["rms", "p2p", "level_db", "freq_hz", "freq_reliable",
                "centroid_hz", "raw", "difference", "pressure_kpa"]
 
-# Everything we STORE per reading (the last two are calculated by the server).
 FEATURES = ["rms", "p2p", "level_db", "freq_hz", "freq_reliable", "centroid_hz",
             "raw", "difference", "pressure_kpa", "delta_pressure_kpa", "delta_freq_hz"]
 
-# The 7 features the SVM was really trained on (train_model.ipynb dropped the rest),
-# in the EXACT training order. If the scaler remembers its column names, those win.
+# Preserve the model's training order.
 MODEL_FEATURES = ["rms", "p2p", "level_db", "freq_hz", "centroid_hz",
                   "pressure_kpa", "delta_pressure_kpa"]
 
-# Class names the server understands (after lower-case and "_" / "-" -> space).
-# If your label_encoder uses other names, add them here. Unknown names are
-# REJECTED (the old code silently treated every unknown name as "Not Leakage").
+# Accepted normalized model labels.
 LEAK_NAMES = {"leakage", "leak", "leaking"}
 NORMAL_NAMES = {"not leakage", "no leakage", "non leakage", "not leak", "no leak", "normal"}
 
@@ -51,7 +44,6 @@ def clean(name) -> str:
     return str(name).strip().lower().replace("_", " ").replace("-", " ")
 
 
-# ----------------------------------------------------------------- helpers
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
@@ -86,7 +78,6 @@ def init_db():
         con.execute("CREATE INDEX IF NOT EXISTS i_read_ts ON sensor_readings(timestamp)")
 
 
-# ----------------------------------------------------------------- SVM model
 class Model:
     """Finds and loads the 3 trained files and checks them. Never makes up a prediction."""
     NAMES = {"svm": ["svc_model", "svm_model", "svm", "svc", "model"],
@@ -126,13 +117,11 @@ class Model:
 
     def check(self):
         """Stops the model from running with wrong columns, wrong order or unknown labels."""
-        # 1) labels
         classes = [clean(c) for c in self.encoder.classes_]
         bad = [c for c in classes if c not in LEAK_NAMES | NORMAL_NAMES]
         if bad or not any(c in LEAK_NAMES for c in classes):
             raise ValueError(f"label_encoder classes {list(self.encoder.classes_)} are not understood. "
                              "Add the names to LEAK_NAMES / NORMAL_NAMES in app.py")
-        # 2) columns: if the scaler remembers its column names, they decide the order
         names = getattr(self.scaler, "feature_names_in_", None)
         if names is not None:
             names = [str(n) for n in names]
@@ -145,14 +134,14 @@ class Model:
             if count != len(MODEL_FEATURES):
                 raise ValueError(f"Scaler expects {count} features but MODEL_FEATURES has {len(MODEL_FEATURES)}")
             self.order = list(MODEL_FEATURES)
-        # 2b) scaler and SVM must come from the SAME training run
+        # The scaler and SVM must come from the same training run.
         svm_n = getattr(self.svm, "n_features_in_", None)
         if svm_n is not None and svm_n != len(self.order):
             raise ValueError(
                 f"MISMATCH: scaler file {self.found['scaler']} has {len(self.order)} columns {self.order} "
                 f"but SVM file {self.found['svm']} expects {svm_n}. They come from different training runs: "
                 "re-run ALL cells of train_model.ipynb, copy the 3 new .pkl files into models/, delete old copies")
-        # 3) if the SVM file is a Pipeline that already scales, do not scale twice
+        # Avoid scaling twice when the pipeline already includes a scaler.
         steps = getattr(self.svm, "steps", [])
         self.pipeline_has_scaler = any("scaler" in type(s).__name__.lower() for _, s in steps)
 
@@ -193,7 +182,6 @@ class Model:
 
 model = Model()
 
-# ----------------------------------------------------------------- live state
 last = {"seen": None, "timestamp": None, "prediction": None, "reading": None, "note": None}
 clients: set[WebSocket] = set()
 pump = {"enabled": False}         # local fallback; Vercel uses shared Redis state
@@ -333,11 +321,10 @@ async def watchdog():
             await broadcast(snapshot("state_change"))
 
 
-# ----------------------------------------------------------------- app
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    # show the last stored reading, but stay OFFLINE until a NEW reading arrives
+    # Keep persisted readings offline until the device sends a new one.
     with closing(db()) as con:
         r = con.execute("SELECT * FROM sensor_readings ORDER BY id DESC LIMIT 1").fetchone()
     if r:
@@ -374,7 +361,6 @@ class ReadingIn(BaseModel):
     is_test: bool = False   # set True for any manual / fake data
 
 
-# ----------------------------------------------------------------- endpoints
 @app.post("/api/readings", status_code=201)
 async def post_reading(data: ReadingIn):
     values = {f: getattr(data, f) for f in PICO_FIELDS}
@@ -396,9 +382,7 @@ async def post_reading(data: ReadingIn):
             print("Shared state read error:", repr(e))
             raise HTTPException(503, "Could not read shared AirGuard state")
 
-    # The two calculated features: change since the PREVIOUS reading.
-    # First reading (or first after a disconnect): no change yet -> 0, so we can
-    # still predict on EVERY reading.
+    # Calculate deltas from the previous recent reading.
     previous = shared_previous or (last["reading"] if is_connected() else None)
     if previous is not None:
         values["delta_pressure_kpa"] = values["pressure_kpa"] - previous["pressure_kpa"]
@@ -406,7 +390,6 @@ async def post_reading(data: ReadingIn):
     else:
         values["delta_pressure_kpa"] = values["delta_freq_hz"] = 0.0
 
-    # Predict on every reading (needs only the trained model)
     label, note = None, (None if pump["enabled"] else "system_off")
     if model.missing:
         model.load()                                # try again, no restart needed

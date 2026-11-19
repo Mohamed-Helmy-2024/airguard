@@ -1,12 +1,5 @@
-# AirGuard - Pico 2 W main.py
-# Sound meter + frequency + HX710B pressure + pump control + send to API
-#
-# WIRING
-#   LM393 sound module : VCC -> 3V3(OUT) pin 36 | GND -> AGND pin 33
-#                        A0  -> GP26 pin 31
-#                        D0  -> GP14 pin 19 (optional)
-#   HX710B             : DOUT -> GP2 | SCK -> GP3
-#   Pump               : GP15 (use a transistor/MOSFET driver + flyback diode)
+# Wiring: LM393 VCC/GND to pins 36/33, A0 to GP26, optional D0 to GP14.
+# HX710B DOUT/SCK to GP2/GP3; pump to GP15 through a driver and flyback diode.
 
 from machine import ADC, Pin
 from time import ticks_us, ticks_add, ticks_diff, ticks_ms, sleep_ms, sleep_us
@@ -20,19 +13,15 @@ try:
 except ImportError:
     import requests
 
-# =====================================================================
-# 1. SETTINGS  (edit these)
-# =====================================================================
 WIFI_SSID = "AirGuard"
 WIFI_PASSWORD = "AirGuard50100150"
 
-# Vercel FastAPI deployment. Keep this host in sync with frontend/script.js.
+# Keep this API host in sync with frontend/script.js.
 API_URL = "https://airguard-neon.vercel.app/api/readings"
 PUMP_URL = API_URL.rsplit("/", 1)[0] + "/pump"
 DEVICE_ID = "pico2w-01"
 SEND_INTERVAL_MS = 2000      # must be well below the server timeout (10 s)
 
-# ---- sound ----
 FS = 8000
 N = 400                      # 50 ms window
 CAL_OFFSET = 0.0
@@ -40,7 +29,6 @@ M = 512                      # FFT size (zero-padded)
 MIN_FREQ = 50
 FREQ_MIN_RMS = 150           # below this RMS the frequency is unreliable
 
-# ---- pressure ----
 ZERO_OFFSET = 3509885
 ADC_MAX = 8388607
 MAX_PRESSURE_KPA = 40.0
@@ -50,9 +38,6 @@ SENSOR_TIMEOUT_MS = 3000     # tolerate brief HX710B gaps; prolonged sensor loss
 
 LOOP_DELAY_MS = 100
 
-# =====================================================================
-# 2. PINS
-# =====================================================================
 PERIOD = 1000000 // FS
 adc = ADC(Pin(26))
 d0 = Pin(14, Pin.IN)
@@ -63,9 +48,6 @@ pump = Pin(15, Pin.OUT)
 pump.value(0)
 SCK.value(0)
 
-# =====================================================================
-# 3. FFT TABLES (computed once)
-# =====================================================================
 buf = array('H', [0] * N)
 
 HALF = M // 2
@@ -88,9 +70,6 @@ for _i in range(1, M):
     REV[_i] = _j
 
 
-# =====================================================================
-# 4. SOUND FUNCTIONS
-# =====================================================================
 def capture():
     """Fill buf with N microphone samples."""
     nxt = ticks_us()
@@ -195,9 +174,6 @@ def measure_sound():
     }
 
 
-# =====================================================================
-# 5. PRESSURE FUNCTIONS
-# =====================================================================
 press_hist = []
 last_ok = ticks_ms()
 
@@ -264,9 +240,6 @@ def control_pump(pressure_kpa):
     return "ON (dashboard)"
 
 
-# =====================================================================
-# 6. WI-FI AND SENDING
-# =====================================================================
 wlan = network.WLAN(network.STA_IF)
 pump_enabled = False         # fail-safe default; dashboard must explicitly turn it on
 
@@ -356,9 +329,6 @@ def poll_pump_command():
             response.close()
 
 
-# =====================================================================
-# 7. MAIN LOOP
-# =====================================================================
 print("AirGuard Pico started")
 connect_wifi()
 last_sent = ticks_ms()
@@ -367,9 +337,6 @@ while True:
     sound = measure_sound()
     pressure = measure_pressure()
 
-    # The old firmware only learned the dashboard state from a successful
-    # pressure POST. A missing HX710B sample therefore also blocked OFF/ON
-    # commands from reaching the Pico.
     if ticks_diff(ticks_ms(), last_sent) >= SEND_INTERVAL_MS:
         poll_pump_command()
         if pressure is not None:

@@ -1,10 +1,8 @@
-// ===== CHANGE THIS to your FastAPI address (no slash at the end) =====
 const API_BASE = "https://airguard-neon.vercel.app";
 
 const $ = (id) => document.getElementById(id);
 
-// ---------------------------------------------------------------- helpers
-// Show UTC timestamps from the server in Cairo time
+// Display server timestamps in Cairo time.
 function cairo(ts) {
   if (!ts) return "-";
   const fixed = ts.replace(/(\.\d{3})\d*/, "$1");   // 6 -> 3 decimals (safe for all browsers)
@@ -30,7 +28,6 @@ function showPage(id) {
   $(id).classList.remove("hidden");
 }
 
-// ---------------------------------------------------------------- system state
 const STATES = { normal: "NORMAL", leakage: "LEAKAGE", offline: "OFFLINE", off: "SYSTEM OFF" };
 
 function updateSystemState(state) {
@@ -50,7 +47,6 @@ const REASONS = {
   system_off: "System is OFF (pump turned off)",
 };
 
-// ---------------------------------------------------------------- pump button
 let pumpOn = false;
 
 function showPump(on) {
@@ -85,7 +81,6 @@ async function togglePump() {
   }
 }
 
-// ---------------------------------------------------------------- dashboard
 const SENSORS = [
   ["rms", "RMS", ""], ["p2p", "Peak-to-peak", ""], ["level_db", "Sound level", "dB"],
   ["freq_hz", "Frequency", "Hz"], ["centroid_hz", "Spectral centroid", "Hz"],
@@ -103,7 +98,7 @@ function showReading(r) {
     return `<div class="item"><small>${name}</small><b>${value}</b></div>`;
   }).join("");
 
-  // pressure gauge (0 - 40 kPa); path length is about 283
+  // Gauge range is 0–40 kPa; SVG path length is about 283.
   const p = r && r.pressure_kpa != null ? r.pressure_kpa : null;
   const part = p == null ? 0 : Math.min(Math.max(p / 40, 0), 1);
   $("gaugeFill").style.strokeDasharray = (part * 283) + " 283";
@@ -168,7 +163,6 @@ async function loadHealth() {
   }
 }
 
-// ---------------------------------------------------------------- charts
 const CHARTS = {
   pressureChart: [["pressure_kpa", "Pressure (kPa)", "#2563eb"]],
   soundChart: [["level_db", "Sound level (dB)", "#f59e0b"]],
@@ -220,7 +214,6 @@ function addToCharts(r) {
   }
 }
 
-// ---------------------------------------------------------------- leakage history
 function rangeQuery() {
   const range = $("range").value;
   if (range !== "custom") return "range=" + range;
@@ -247,7 +240,6 @@ async function loadEvents() {
   }
 }
 
-// ---------------------------------------------------------------- WebSocket (live updates)
 let wsOpen = false;
 
 function connectWS() {
@@ -267,7 +259,6 @@ function connectWS() {
   ws.onerror = () => ws.close();
 }
 
-// ---------------------------------------------------------------- About cards
 const PEOPLE = [
   ["FEE Student", "Studies computer science and engineering and builds practical engineering projects."],
   ["FEE Student", "Trains and tests machine learning models, such as the SVM used in AirGuard."],
@@ -284,14 +275,12 @@ $("aboutCards").innerHTML = PEOPLE.map(([role, text]) => `
     <div class="back"><p>${text}</p></div>
   </div></div>`).join("");
 
-// ---------------------------------------------------------------- start
 loadLatest();
 loadHealth();
 loadCharts();
 loadEvents();
 connectWS();
-// Poll REST even if the WebSocket appears open; Vercel may serve the socket
-// and Pico POST from separate function instances.
+// REST polling keeps updates visible across Vercel function instances.
 setInterval(loadLatest, 2000);
 setInterval(loadEvents, 15000);
 setInterval(loadHealth, 30000);
