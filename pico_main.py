@@ -340,9 +340,7 @@ def poll_pump_command():
         if response.status_code == 200:
             result = response.json()
             if result.get("shared_store_ready") is False:
-                pump_enabled = False
-                print("PUMP CONTROL BLOCKED: Vercel shared store is not configured")
-                return
+                print("WARNING: no shared store; using this API instance's pump command")
             state = result.get("pump_enabled")
             if isinstance(state, bool):
                 pump_enabled = state

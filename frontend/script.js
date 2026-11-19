@@ -157,7 +157,9 @@ async function loadHealth() {
     const warnings = [];
     if (!h.model_ready) warnings.push("SVM model not ready: " + (h.model_error || h.missing_model_files.join(", ")));
     if (h.vercel_environment && !h.shared_store_ready)
-      warnings.push("Shared store missing: configure UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Vercel, then redeploy.");
+      warnings.push("Shared store missing: readings, history, and pump state may reset between Vercel instances.");
+    else if (h.vercel_environment && !h.shared_store_ok)
+      warnings.push("Shared store connection failed; check the Upstash URL/token in Vercel.");
     $("healthWarning").classList.toggle("hidden", warnings.length === 0);
     $("healthWarning").textContent = warnings.join(" | ");
   } catch (e) {

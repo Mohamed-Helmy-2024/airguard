@@ -199,6 +199,9 @@ clients: set[WebSocket] = set()
 pump = {"enabled": False}         # local fallback; Vercel uses shared Redis state
 KV_URL = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 KV_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+READINGS_KEY = "airguard:readings"
+EVENTS_KEY = "airguard:events"
+HISTORY_DAYS = 30
 
 
 def shared_store_ready() -> bool:
@@ -215,19 +218,54 @@ async def shared_get(key: str):
         return response.json().get("result")
 
 
-async def shared_set(key: str, value: str):
+async def shared_command(command: list):
     if not shared_store_ready():
-        return False
-    async with httpx.AsyncClient(timeout=5.0) as client:
+        raise RuntimeError("Upstash Redis is not configured")
+    async with httpx.AsyncClient(timeout=8.0) as client:
         response = await client.post(
             KV_URL,
-            json=["SET", key, value],
+            json=command,
             headers={"Authorization": "Bearer " + KV_TOKEN},
         )
         response.raise_for_status()
-        if response.json().get("result") != "OK":
-            raise RuntimeError("Redis did not confirm SET")
+        payload = response.json()
+        if payload.get("error"):
+            raise RuntimeError(payload["error"])
+        return payload.get("result")
+
+
+async def shared_set(key: str, value: str):
+    if not shared_store_ready():
+        return False
+    if await shared_command(["SET", key, value]) != "OK":
+        raise RuntimeError("Redis did not confirm SET")
     return True
+
+
+async def shared_delete(key: str):
+    return await shared_command(["DEL", key])
+
+
+async def shared_zadd_recent(key: str, timestamp: str, member: str):
+    score = to_dt(timestamp).timestamp()
+    cutoff = datetime.now(timezone.utc).timestamp() - HISTORY_DAYS * 86400
+    script = (
+        "redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2]); "
+        "redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[3]); return 1"
+    )
+    return await shared_command(["EVAL", script, "1", key, str(score), member, str(cutoff)])
+
+
+async def shared_zremove(key: str, member: str):
+    return await shared_command(["ZREM", key, member])
+
+
+async def shared_zrange(key: str, start: datetime, end: datetime, limit: int = 5000):
+    result = await shared_command([
+        "ZRANGEBYSCORE", key, str(start.timestamp()), str(end.timestamp()),
+        "LIMIT", "0", str(max(1, min(limit, 5000))),
+    ])
+    return result or []
 
 
 def is_connected() -> bool:
@@ -340,20 +378,28 @@ class ReadingIn(BaseModel):
 @app.post("/api/readings", status_code=201)
 async def post_reading(data: ReadingIn):
     values = {f: getattr(data, f) for f in PICO_FIELDS}
+    shared_previous = None
+    shared_active_raw = None
 
     if shared_store_ready():
         try:
             stored_pump = await shared_get("airguard:pump_enabled")
             if stored_pump is not None:
                 pump["enabled"] = str(stored_pump).lower() == "true"
+            latest_raw = await shared_get("airguard:latest_reading")
+            if latest_raw:
+                candidate = json.loads(latest_raw)
+                if (datetime.now(timezone.utc) - to_dt(candidate["timestamp"])).total_seconds() <= DEVICE_TIMEOUT_SECONDS:
+                    shared_previous = candidate
+            shared_active_raw = await shared_get("airguard:active_event")
         except Exception as e:
-            print("Shared pump state read error:", repr(e))
-            pump["enabled"] = False
+            print("Shared state read error:", repr(e))
+            raise HTTPException(503, "Could not read shared AirGuard state")
 
     # The two calculated features: change since the PREVIOUS reading.
     # First reading (or first after a disconnect): no change yet -> 0, so we can
     # still predict on EVERY reading.
-    previous = last["reading"] if is_connected() else None
+    previous = shared_previous or (last["reading"] if is_connected() else None)
     if previous is not None:
         values["delta_pressure_kpa"] = values["pressure_kpa"] - previous["pressure_kpa"]
         values["delta_freq_hz"] = values["freq_hz"] - previous["freq_hz"]
@@ -378,35 +424,77 @@ async def post_reading(data: ReadingIn):
             note = "prediction_error"
 
     ts = now_ts()
+    reading_id = int(to_dt(ts).timestamp() * 1_000_000)
+    shared_active = json.loads(shared_active_raw) if shared_active_raw else None
+    shared_event_update = None
+    shared_event_close = False
+    event_id = None
+    if shared_store_ready():
+        if label == "Leakage":
+            shared_active = shared_active or {
+                "id": reading_id, "start_timestamp": ts, "end_timestamp": None,
+                "duration_seconds": None, "status": "active", "sample_count": 0,
+                "is_test": int(data.is_test),
+            }
+            shared_active["sample_count"] += 1
+            event_id = shared_active["id"]
+            shared_event_update = shared_active
+        elif label == "Not Leakage" and shared_active is not None:
+            shared_active["end_timestamp"] = ts
+            shared_active["duration_seconds"] = (to_dt(ts) - to_dt(shared_active["start_timestamp"])).total_seconds()
+            shared_active["status"] = "closed"
+            shared_event_update = shared_active
+            shared_event_close = True
+
     with closing(db()) as con, con:   # one transaction
         cur = con.execute(
-            f"INSERT INTO sensor_readings (timestamp, device_id, {', '.join(FEATURES)},"
-            f" prediction, is_test) VALUES (?, ?, {', '.join('?' * len(FEATURES))}, ?, ?)",
-            (ts, data.device_id, *[values[f] for f in FEATURES], label, int(data.is_test)))
-        reading_id = cur.lastrowid
-        active = con.execute("SELECT * FROM leakage_events WHERE status='active'").fetchone()
+            f"INSERT INTO sensor_readings (id, timestamp, device_id, {', '.join(FEATURES)},"
+            f" prediction, is_test) VALUES (?, ?, ?, {', '.join('?' * len(FEATURES))}, ?, ?)",
+            (reading_id, ts, data.device_id, *[values[f] for f in FEATURES], label, int(data.is_test)))
 
-        if label == "Leakage"  :
-            if active is None:   # Not Leakage -> Leakage: open a new event
-                cur = con.execute(
-                    "INSERT INTO leakage_events (start_timestamp, status, sample_count, is_test)"
-                    " VALUES (?, 'active', 0, ?)", (ts, int(data.is_test)))
-                event_id = cur.lastrowid
-            else:
-                event_id = active["id"]
-            con.execute("UPDATE leakage_events SET sample_count = sample_count + 1 WHERE id=?", (event_id,))
-            con.execute("UPDATE sensor_readings SET event_id=? WHERE id=?", (event_id, reading_id))
-        elif label == "Not Leakage" and active is not None:   # Leakage -> Not Leakage: close it
-            seconds = (to_dt(ts) - to_dt(active["start_timestamp"])).total_seconds()
-            con.execute("UPDATE leakage_events SET status='closed', end_timestamp=?, duration_seconds=?"
-                        " WHERE id=?", (ts, seconds, active["id"]))
-        # label is None -> the active event is left untouched
+        if shared_store_ready():
+            if event_id is not None:
+                con.execute("UPDATE sensor_readings SET event_id=? WHERE id=?", (event_id, reading_id))
+        else:
+            active = con.execute("SELECT * FROM leakage_events WHERE status='active'").fetchone()
+            if label == "Leakage":
+                if active is None:
+                    cur = con.execute(
+                        "INSERT INTO leakage_events (start_timestamp, status, sample_count, is_test)"
+                        " VALUES (?, 'active', 0, ?)", (ts, int(data.is_test)))
+                    event_id = cur.lastrowid
+                else:
+                    event_id = active["id"]
+                con.execute("UPDATE leakage_events SET sample_count = sample_count + 1 WHERE id=?", (event_id,))
+                con.execute("UPDATE sensor_readings SET event_id=? WHERE id=?", (event_id, reading_id))
+            elif label == "Not Leakage" and active is not None:
+                seconds = (to_dt(ts) - to_dt(active["start_timestamp"])).total_seconds()
+                con.execute("UPDATE leakage_events SET status='closed', end_timestamp=?, duration_seconds=?"
+                            " WHERE id=?", (ts, seconds, active["id"]))
 
         row = con.execute("SELECT * FROM sensor_readings WHERE id=?", (reading_id,)).fetchone()
 
-    last.update(seen=time.monotonic(), timestamp=ts, prediction=label, reading=dict(row), note=note)
+    row_data = dict(row)
     if shared_store_ready():
-        await shared_set("airguard:latest_reading", json.dumps(dict(row), separators=(",", ":")))
+        row_data["id"] = reading_id
+        row_data["event_id"] = event_id
+        if shared_event_update is not None:
+            if shared_active_raw:
+                await shared_zremove(EVENTS_KEY, shared_active_raw)
+            event_json = json.dumps(shared_event_update, separators=(",", ":"), sort_keys=True)
+            await shared_command([
+                "ZADD", EVENTS_KEY,
+                str(to_dt(shared_event_update["start_timestamp"]).timestamp()), event_json,
+            ])
+            if shared_event_close:
+                await shared_delete("airguard:active_event")
+            else:
+                await shared_set("airguard:active_event", event_json)
+        row_json = json.dumps(row_data, separators=(",", ":"))
+        await shared_zadd_recent(READINGS_KEY, ts, row_json)
+        await shared_set("airguard:latest_reading", row_json)
+
+    last.update(seen=time.monotonic(), timestamp=ts, prediction=label, reading=row_data, note=note)
     await broadcast(snapshot("reading"))
     state, reason = get_state()
     return {"success": True, "reading_id": reading_id, "timestamp": ts,
@@ -469,8 +557,6 @@ async def get_pump():
 @app.post("/api/pump")
 async def set_pump(data: PumpIn):
     """Dashboard button. The Pico reads pump_enabled from its next POST /api/readings reply."""
-    if data.on and os.getenv("VERCEL") and not shared_store_ready():
-        raise HTTPException(503, "Pump ON requires the shared Upstash store; configure its Vercel environment variables")
     if shared_store_ready():
         try:
             await shared_set("airguard:pump_enabled", "true" if data.on else "false")
@@ -498,6 +584,8 @@ async def latest():
                 pump_state = await shared_get("airguard:pump_enabled")
                 if pump_state is not None:
                     result["pump_enabled"] = str(pump_state).lower() == "true"
+                active_raw = await shared_get("airguard:active_event")
+                result["active_event"] = event_dict(json.loads(active_raw)) if active_raw else None
                 if not result["pump_enabled"]:
                     result["state"], result["state_reason"] = "off", "system_off"
                 elif not result["device_connected"]:
@@ -535,10 +623,15 @@ async def history(range: str = "24h", start: datetime | None = None,
     if range not in ("24h", "7d", "30d"):
         raise HTTPException(422, "range must be 24h, 7d or 30d")
     a, b = time_range(range, start, end)
-    with closing(db()) as con:
-        rows = con.execute("SELECT * FROM sensor_readings WHERE timestamp BETWEEN ? AND ?"
-                           " ORDER BY timestamp LIMIT ?", (a, b, limit)).fetchall()
-    return {"start": a, "end": b, "count": len(rows), "readings": [dict(r) for r in rows]}
+    if shared_store_ready():
+        members = await shared_zrange(READINGS_KEY, to_dt(a), to_dt(b), limit)
+        rows = [json.loads(member) for member in members]
+    else:
+        with closing(db()) as con:
+            rows = con.execute("SELECT * FROM sensor_readings WHERE timestamp BETWEEN ? AND ?"
+                               " ORDER BY timestamp LIMIT ?", (a, b, limit)).fetchall()
+        rows = [dict(r) for r in rows]
+    return {"start": a, "end": b, "count": len(rows), "readings": rows}
 
 
 @app.get("/api/leakage-events")
@@ -547,17 +640,36 @@ async def leakage_events(range: str = "24h", start: datetime | None = None,
     if range not in ("24h", "7d", "30d"):
         raise HTTPException(422, "range must be 24h, 7d or 30d")
     a, b = time_range(range, start, end)
-    with closing(db()) as con:
-        rows = con.execute(
-            "SELECT * FROM leakage_events WHERE start_timestamp <= ?"
-            " AND (end_timestamp IS NULL OR end_timestamp >= ?) ORDER BY start_timestamp",
-            (b, a)).fetchall()
-        events = [event_dict(r) for r in rows]
+    if shared_store_ready():
+        members = await shared_zrange(
+            EVENTS_KEY, datetime.fromtimestamp(0, timezone.utc), to_dt(b), 5000)
+        stored_events = [json.loads(member) for member in members]
+        events = [event for event in stored_events
+                  if event["start_timestamp"] <= b
+                  and (event.get("end_timestamp") is None or event["end_timestamp"] >= a)]
+        active_raw = await shared_get("airguard:active_event")
+        if active_raw:
+            active = json.loads(active_raw)
+            if active["start_timestamp"] <= b and active["start_timestamp"] not in {e["start_timestamp"] for e in events}:
+                events.append(event_dict(active))
+        events.sort(key=lambda event: event["start_timestamp"])
         if include_readings:
-            for e in events:
-                rs = con.execute("SELECT * FROM sensor_readings WHERE event_id=? ORDER BY timestamp",
-                                 (e["id"],)).fetchall()
-                e["readings"] = [dict(r) for r in rs]
+            sensor_members = await shared_zrange(READINGS_KEY, to_dt(a), to_dt(b), 5000)
+            readings = [json.loads(member) for member in sensor_members]
+            for event in events:
+                event["readings"] = [r for r in readings if r.get("event_id") == event["id"]]
+    else:
+        with closing(db()) as con:
+            rows = con.execute(
+                "SELECT * FROM leakage_events WHERE start_timestamp <= ?"
+                " AND (end_timestamp IS NULL OR end_timestamp >= ?) ORDER BY start_timestamp",
+                (b, a)).fetchall()
+            events = [event_dict(r) for r in rows]
+            if include_readings:
+                for e in events:
+                    rs = con.execute("SELECT * FROM sensor_readings WHERE event_id=? ORDER BY timestamp",
+                                     (e["id"],)).fetchall()
+                    e["readings"] = [dict(r) for r in rs]
     return {"start": a, "end": b,
             "event_count": len(events),
             "total_duration_seconds": sum(e["duration_seconds"] or 0 for e in events),
@@ -573,12 +685,20 @@ async def health():
     except Exception:
         database = "error"
     state, reason = get_state()
+    shared_ok = shared_store_ready()
+    if shared_ok:
+        try:
+            await shared_get("airguard:pump_enabled")
+        except Exception as e:
+            shared_ok = False
+            print("Shared store health error:", repr(e))
     return {"status": "ok" if database == "ok" else "degraded", "database": database,
             "system_state": state, "state_reason": reason,
             "device_timeout_seconds": DEVICE_TIMEOUT_SECONDS,
             "model_ready": not model.missing, "missing_model_files": model.missing,
             "model_error": model.error, "files_found": model.found,
             "shared_store_ready": shared_store_ready(),
+            "shared_store_ok": shared_ok,
             "vercel_environment": bool(os.getenv("VERCEL")),
             "folders_searched": [str(f) for f in model.folders],
             "websocket_clients": len(clients)}
