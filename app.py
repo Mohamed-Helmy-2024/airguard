@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 BASE = Path(__file__).resolve().parent          # the folder where app.py is
 # Vercel deployments use temporary storage; persistent data uses Upstash.
 DB_FILE = Path("/tmp/airguard.db") if os.getenv("VERCEL") else BASE / "airguard.db"
-DEVICE_TIMEOUT_SECONDS = float(os.getenv("DEVICE_TIMEOUT_SECONDS", 10))
+DEVICE_TIMEOUT_SECONDS = float(os.getenv("DEVICE_TIMEOUT_SECONDS", 50))
 
 # Pico fields match the training column names.
 PICO_FIELDS = ["rms", "p2p", "level_db", "freq_hz", "freq_reliable",
