@@ -1,4 +1,4 @@
-const API_BASE = "https://brick-breeches-diploma.ngrok-free.dev";
+const API_BASE = "https://airguard-ciwi8arjn-mohamed-dbf9.vercel.app";
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,10 +18,7 @@ function duration(s) {
 }
 
 async function getJSON(path) {
-  const res = await fetch(API_BASE + path, {
-    cache: "no-store",
-    headers: { "ngrok-skip-browser-warning": "true" },
-  });
+  const res = await fetch(API_BASE + path, { cache: "no-store" });
   if (!res.ok) throw new Error("Server returned " + res.status);
   return res.json();
 }
@@ -66,10 +63,7 @@ async function togglePump() {
   try {
     const res = await fetch(API_BASE + "/api/pump", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "ngrok-skip-browser-warning": "true",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ on: !pumpOn }),
     });
     if (res.status === 404 || res.status === 405)
