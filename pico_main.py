@@ -13,8 +13,8 @@ try:
 except ImportError:
     import requests
 
-WIFI_SSID = "AirGuard"
-WIFI_PASSWORD = "AirGuard50100150"
+WIFI_SSID = "medo"
+WIFI_PASSWORD = "medo21/10/2004"
 
 # Keep this API host in sync with frontend/script.js.
 API_URL = "https://airguard-neon.vercel.app/api/readings"

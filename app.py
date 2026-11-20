@@ -185,6 +185,7 @@ model = Model()
 last = {"seen": None, "timestamp": None, "prediction": None, "reading": None, "note": None}
 clients: set[WebSocket] = set()
 pump = {"enabled": False}         # local fallback; Vercel uses shared Redis state
+warmup_until = 0.0
 KV_URL = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 KV_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
 READINGS_KEY = "airguard:readings"
@@ -264,6 +265,8 @@ def get_state():
     """Returns (state, reason). Offline always wins over the last prediction."""
     if not pump["enabled"]:
         return "off", "system_off"
+    if time.time() < warmup_until:
+        return "normal", "ok"
     if last["seen"] is None:
         return "offline", "no_data_yet"
     if not is_connected():
@@ -363,6 +366,7 @@ class ReadingIn(BaseModel):
 
 @app.post("/api/readings", status_code=201)
 async def post_reading(data: ReadingIn):
+    global warmup_until
     values = {f: getattr(data, f) for f in PICO_FIELDS}
     shared_previous = None
     shared_active_raw = None
@@ -372,6 +376,8 @@ async def post_reading(data: ReadingIn):
             stored_pump = await shared_get("airguard:pump_enabled")
             if stored_pump is not None:
                 pump["enabled"] = str(stored_pump).lower() == "true"
+            stored_warmup = await shared_get("airguard:warmup_until")
+            warmup_until = float(stored_warmup) if stored_warmup is not None else 0.0
             latest_raw = await shared_get("airguard:latest_reading")
             if latest_raw:
                 candidate = json.loads(latest_raw)
@@ -395,6 +401,8 @@ async def post_reading(data: ReadingIn):
         model.load()                                # try again, no restart needed
     if note == "system_off":
         pass                                        # system OFF: no prediction
+    elif time.time() < warmup_until:
+        note = "startup_warmup"
     elif model.missing:
         note = "model_unavailable"
     else:
@@ -540,12 +548,25 @@ async def get_pump():
 @app.post("/api/pump")
 async def set_pump(data: PumpIn):
     """Dashboard button. The Pico reads pump_enabled from its next POST /api/readings reply."""
+    global warmup_until
     if shared_store_ready():
         try:
+            stored = await shared_get("airguard:pump_enabled")
+            was_enabled = str(stored).lower() == "true" if stored is not None else pump["enabled"]
+            if data.on and not was_enabled:
+                warmup_until = time.time() + 5.0
+                await shared_set("airguard:warmup_until", str(warmup_until))
+            elif not data.on:
+                warmup_until = 0.0
+                await shared_delete("airguard:warmup_until")
             await shared_set("airguard:pump_enabled", "true" if data.on else "false")
         except Exception as e:
             print("Shared pump state write error:", repr(e))
             raise HTTPException(503, "Could not save the pump command to shared storage")
+    elif data.on and not pump["enabled"]:
+        warmup_until = time.time() + 5.0
+    elif not data.on:
+        warmup_until = 0.0
     pump["enabled"] = data.on
     await broadcast(snapshot("state_change"))
     return {"pump_enabled": pump["enabled"]}
@@ -553,9 +574,15 @@ async def set_pump(data: PumpIn):
 
 @app.get("/api/latest")
 async def latest():
+    global warmup_until
     result = snapshot("snapshot")
     if shared_store_ready():
         try:
+            stored_warmup = await shared_get("airguard:warmup_until")
+            warmup_until = float(stored_warmup) if stored_warmup is not None else 0.0
+            pump_state = await shared_get("airguard:pump_enabled")
+            if pump_state is not None:
+                result["pump_enabled"] = str(pump_state).lower() == "true"
             stored = await shared_get("airguard:latest_reading")
             if stored:
                 reading = json.loads(stored)
@@ -564,13 +591,12 @@ async def latest():
                 result["prediction"] = reading.get("prediction")
                 age = (datetime.now(timezone.utc) - to_dt(reading["timestamp"])).total_seconds()
                 result["device_connected"] = age <= DEVICE_TIMEOUT_SECONDS
-                pump_state = await shared_get("airguard:pump_enabled")
-                if pump_state is not None:
-                    result["pump_enabled"] = str(pump_state).lower() == "true"
                 active_raw = await shared_get("airguard:active_event")
                 result["active_event"] = event_dict(json.loads(active_raw)) if active_raw else None
                 if not result["pump_enabled"]:
                     result["state"], result["state_reason"] = "off", "system_off"
+                elif time.time() < warmup_until:
+                    result["state"], result["state_reason"] = "normal", "ok"
                 elif not result["device_connected"]:
                     result["state"], result["state_reason"] = "offline", "device_timeout"
                 elif result["prediction"] is None:
@@ -578,6 +604,8 @@ async def latest():
                 else:
                     result["state"] = "leakage" if result["prediction"] == "Leakage" else "normal"
                     result["state_reason"] = "ok"
+            if result["pump_enabled"] and time.time() < warmup_until:
+                result["state"], result["state_reason"] = "normal", "ok"
         except Exception as e:
             print("Shared latest reading error:", repr(e))
             raise HTTPException(503, "Could not read the shared latest reading")
