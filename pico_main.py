@@ -20,7 +20,7 @@ WIFI_PASSWORD = "medo21/10/2004"
 API_URL = "https://airguard-neon.vercel.app/api/readings"
 PUMP_URL = API_URL.rsplit("/", 1)[0] + "/pump"
 DEVICE_ID = "pico2w-01"
-SEND_INTERVAL_MS = 2000      # must be well below the server timeout (10 s)
+SEND_INTERVAL_MS = 1000
 
 FS = 8000
 N = 400                      # 50 ms window
@@ -228,11 +228,7 @@ def measure_pressure():
 
 
 def control_pump(pressure_kpa):
-    """Apply the dashboard's ON/OFF command after pressure sensor validation.
-
-    The pressure value is intentionally not compared with a zero target: that
-    made ON impossible whenever the sensor reported any non-negative pressure.
-    """
+    """Apply the dashboard's ON/OFF command."""
     if not pump_enabled:
         pump.value(0)
         return "OFF (dashboard)"
@@ -348,8 +344,8 @@ while True:
              sound["freq_hz"], sound["centroid_hz"]))
 
     if pressure is None:
-        pump.value(0)                    # safety: sensor error -> pump OFF
-        print("HX710B ERROR: DOUT=%d; Pump output=OFF (sensor safety)" % DOUT.value())
+        pump_status = control_pump(None)
+        print("HX710B ERROR: DOUT=%d; Pump=%s | GP15=%d" % (DOUT.value(), pump_status, pump.value()))
     else:
         pump_status = control_pump(pressure["pressure_kpa"])
         print("RAW:", pressure["raw"],

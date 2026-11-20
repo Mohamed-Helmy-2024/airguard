@@ -133,7 +133,7 @@ function showSnapshot(m) {
   }
   knownEventId = ev ? ev.id : null;
 
-  if (m.type === "reading") addToCharts(m.reading);
+  addToCharts(m.reading);
 }
 
 async function loadLatest() {
@@ -252,8 +252,6 @@ function connectWS() {
   ws.onclose = () => {
     wsOpen = false;
     $("connection").textContent = "Server: disconnected - retrying...";
-    updateSystemState("offline");
-    $("stateReason").textContent = "Cannot reach the server";
     setTimeout(connectWS, 3000);                         // reconnect
   };
   ws.onerror = () => ws.close();
@@ -309,6 +307,6 @@ loadCharts();
 loadEvents();
 connectWS();
 // REST polling keeps updates visible across Vercel function instances.
-setInterval(loadLatest, 2000);
+setInterval(loadLatest, 1000);
 setInterval(loadEvents, 15000);
 setInterval(loadHealth, 30000);

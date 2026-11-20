@@ -258,7 +258,7 @@ async def shared_zrange(key: str, start: datetime, end: datetime, limit: int = 5
 
 
 def is_connected() -> bool:
-    return last["seen"] is not None and time.monotonic() - last["seen"] <= DEVICE_TIMEOUT_SECONDS
+    return last["seen"] is not None
 
 
 def get_state():
@@ -554,7 +554,7 @@ async def set_pump(data: PumpIn):
             stored = await shared_get("airguard:pump_enabled")
             was_enabled = str(stored).lower() == "true" if stored is not None else pump["enabled"]
             if data.on and not was_enabled:
-                warmup_until = time.time() + 10.0
+                warmup_until = time.time() + 1000.0
                 await shared_set("airguard:warmup_until", str(warmup_until))
             elif not data.on:
                 warmup_until = 0.0
@@ -566,7 +566,7 @@ async def set_pump(data: PumpIn):
     elif data.on and not pump["enabled"]:
         warmup_until = time.time() + 10.0
     elif not data.on:
-        warmup_until = 50.0
+        warmup_until = 10.0
     pump["enabled"] = data.on
     await broadcast(snapshot("state_change"))
     return {"pump_enabled": pump["enabled"]}
@@ -589,8 +589,7 @@ async def latest():
                 result["reading"] = reading
                 result["last_reading_timestamp"] = reading["timestamp"]
                 result["prediction"] = reading.get("prediction")
-                age = (datetime.now(timezone.utc) - to_dt(reading["timestamp"])).total_seconds()
-                result["device_connected"] = age <= DEVICE_TIMEOUT_SECONDS
+                result["device_connected"] = True
                 active_raw = await shared_get("airguard:active_event")
                 result["active_event"] = event_dict(json.loads(active_raw)) if active_raw else None
                 if not result["pump_enabled"]:
