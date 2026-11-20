@@ -566,7 +566,7 @@ async def set_pump(data: PumpIn):
     elif data.on and not pump["enabled"]:
         warmup_until = time.time() + 10.0
     elif not data.on:
-        warmup_until = 0.0
+        warmup_until = 50.0
     pump["enabled"] = data.on
     await broadcast(snapshot("state_change"))
     return {"pump_enabled": pump["enabled"]}
