@@ -1,4 +1,4 @@
-const API_BASE = "https://airguard-neon.vercel.app";
+const API_BASE = "https://brick-breeches-diploma.ngrok-free.dev";
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,7 +18,10 @@ function duration(s) {
 }
 
 async function getJSON(path) {
-  const res = await fetch(API_BASE + path, { cache: "no-store" });
+  const res = await fetch(API_BASE + path, {
+    cache: "no-store",
+    headers: { "ngrok-skip-browser-warning": "true" },
+  });
   if (!res.ok) throw new Error("Server returned " + res.status);
   return res.json();
 }
@@ -63,7 +66,10 @@ async function togglePump() {
   try {
     const res = await fetch(API_BASE + "/api/pump", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true",
+      },
       body: JSON.stringify({ on: !pumpOn }),
     });
     if (res.status === 404 || res.status === 405)
