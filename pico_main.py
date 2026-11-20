@@ -17,7 +17,7 @@ WIFI_SSID = "medo"
 WIFI_PASSWORD = "medo21/10/2004"
 
 # Keep this API host in sync with frontend/script.js.
-API_URL = "https://airguard-ciwi8arjn-mohamed-dbf9.vercel.app/api/readings"
+API_URL = "https://brick-breeches-diploma.ngrok-free.dev/api/readings"
 PUMP_URL = API_URL.rsplit("/", 1)[0] + "/pump"
 DEVICE_ID = "pico2w-01"
 SEND_INTERVAL_MS = 1000
@@ -279,6 +279,7 @@ def send_reading(sound, pressure):
     }
     headers = {
         "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true",
     }
 
     response = None
@@ -304,7 +305,7 @@ def poll_pump_command():
         return
     response = None
     try:
-        response = requests.get(PUMP_URL)
+        response = requests.get(PUMP_URL, headers={"ngrok-skip-browser-warning": "true"})
         if response.status_code == 200:
             result = response.json()
             if result.get("shared_store_ready") is False:
