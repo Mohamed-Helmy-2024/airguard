@@ -263,50 +263,6 @@ function connectWS() {
   ws.onerror = () => ws.close();
 }
 
-const PEOPLE = [
-  {
-    name: "Mohamed Helmy",
-    role: "Team member",
-    theme: "Area to be added",
-    description: "Description to be added.",
-    initials: "MH",
-    image: "profile-mohamed-helmy.jpg",
-  },
-  {
-    name: "Mohamed Kroush",
-    role: "Team member",
-    theme: "Area to be added",
-    description: "Description to be added.",
-    initials: "MK",
-    image: "profile-mohamed-kroush.jpg",
-  },
-  {
-    name: "Mohamed",
-    role: "Team member",
-    theme: "Area to be added",
-    description: "Description to be added.",
-    initials: "M",
-    image: "profile-mohamed.jpg",
-  },
-  {
-    name: "Mohamed Helmi",
-    role: "Team member",
-    theme: "Area to be added",
-    description: "Description to be added.",
-    initials: "MH",
-    image: "profile-mohamed-helmi-2.jpg",
-  },
-];
-
-$("aboutCards").innerHTML = PEOPLE.map((member) => `
-  <div class="flip" onclick="this.classList.toggle('flipped')"><div class="inner">
-    <div class="front">
-      <div class="avatar">${member.initials}<img src="${member.image}" alt="" onerror="this.remove()"></div>
-      <b>${member.name}</b><span>${member.role}</span>
-    </div>
-    <div class="back"><p>${member.theme}: ${member.description}</p></div>
-  </div></div>`).join("");
-
 loadLatest();
 loadHealth();
 loadCharts();

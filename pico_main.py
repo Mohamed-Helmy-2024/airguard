@@ -34,7 +34,7 @@ ADC_MAX = 8388607
 MAX_PRESSURE_KPA = 40.0
 ADC_RANGE = ADC_MAX - ZERO_OFFSET
 PRESS_AVG = 4
-SENSOR_TIMEOUT_MS = 3000     # tolerate brief HX710B gaps; prolonged sensor loss -> pump OFF
+SENSOR_TIMEOUT_MS = 3000     # pressure reading becomes unavailable after prolonged sensor loss
 
 LOOP_DELAY_MS = 100
 
@@ -191,10 +191,11 @@ def read_hx710b():
         SCK.value(0)
         sleep_us(1)
 
-    SCK.value(1)                         # extra pulse: 10 Hz channel
-    sleep_us(1)
-    SCK.value(0)
-    sleep_us(1)
+    for i in range(3):                   # 27 pulses select differential input at 40 Hz
+        SCK.value(1)
+        sleep_us(1)
+        SCK.value(0)
+        sleep_us(1)
 
     if data & 0x800000:
         data -= 0x1000000
