@@ -408,7 +408,7 @@ async def post_reading(data: ReadingIn):
     else:
         try:
             label = model.predict(values)
-            if values["pressure_kpa"] > 36.0:   
+            if values["pressure_kpa"] > 38.0:   
                 label = "Not Leakage"
         except Exception as e:
             print("Prediction error:", repr(e))
@@ -554,7 +554,7 @@ async def set_pump(data: PumpIn):
             stored = await shared_get("airguard:pump_enabled")
             was_enabled = str(stored).lower() == "true" if stored is not None else pump["enabled"]
             if data.on and not was_enabled:
-                warmup_until = time.time() + 15.0
+                warmup_until = time.time() + 10.0
                 await shared_set("airguard:warmup_until", str(warmup_until))
             elif not data.on:
                 warmup_until = 0.0
@@ -564,7 +564,7 @@ async def set_pump(data: PumpIn):
             print("Shared pump state write error:", repr(e))
             raise HTTPException(503, "Could not save the pump command to shared storage")
     elif data.on and not pump["enabled"]:
-        warmup_until = time.time() + 15.0
+        warmup_until = time.time() + 10.0
     elif not data.on:
         warmup_until = 0.0
     pump["enabled"] = data.on
