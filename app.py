@@ -554,7 +554,7 @@ async def set_pump(data: PumpIn):
             stored = await shared_get("airguard:pump_enabled")
             was_enabled = str(stored).lower() == "true" if stored is not None else pump["enabled"]
             if data.on and not was_enabled:
-                warmup_until = time.time() + 1000.0
+                warmup_until = time.time() + 10.0
                 await shared_set("airguard:warmup_until", str(warmup_until))
             elif not data.on:
                 warmup_until = 0.0
