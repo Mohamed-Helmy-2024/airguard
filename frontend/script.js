@@ -1,4 +1,4 @@
-const API_BASE = "https://airguard-gy5xvdjzw-mohamed-dbf9.vercel.app";
+const API_BASE = "https://airguard-neon.vercel.app";
 
 const $ = (id) => document.getElementById(id);
 

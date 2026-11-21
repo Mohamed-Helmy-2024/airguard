@@ -17,7 +17,7 @@ WIFI_SSID = "medo"
 WIFI_PASSWORD = "medo21/10/2004"
 
 # Keep this API host in sync with frontend/script.js.
-API_URL = "https://airguard-gy5xvdjzw-mohamed-dbf9.vercel.app/api/readings"
+API_URL = "https://airguard-neon.vercel.app/api/readings"
 PUMP_URL = API_URL.rsplit("/", 1)[0] + "/pump"
 DEVICE_ID = "pico2w-01"
 SEND_INTERVAL_MS = 1000
